@@ -1,4 +1,4 @@
-# Binary Data Toolkit
+# Binary Data Toolkit.
 
 A set of clean-room Python tools for parsing legacy binary container formats from a 2010s classic MMORPG client. All format knowledge was derived through black-box hex analysis — no proprietary code was referenced or included.
 

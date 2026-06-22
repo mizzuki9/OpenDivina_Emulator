@@ -42,7 +42,7 @@ We are currently analyzing the black-box behavior of the network layer and forma
 * [x] **Network Architecture Design:** Setup the basic TCP server skeleton in C++.
 * [ ] **Packet Analysis (Black-box):** Defining the transport layer protocol reverse engineering (debugging the Finite State Machine (FSM) of the connection).
 * [ ] **Client Loader Module:** Developing an asynchronous memory-hooking DLL in C++ to safely redirect client traffic without breaking file integrity.
-* [x] **Data Extraction Script:** Preliminary Python toolkit available — parses `.biz` / `.pak` / `.sum` binary containers into CSV/JSON. See [`tools/For Output/tookit/README.md`](tools/For%20Output/tookit/README.md). Currently supports only a small subset of client files; work is ongoing.
+* [x] **Data Extraction Script:** Preliminary Python toolkit available — parses `.biz` / `.pak` / `.sum` binary containers into CSV/JSON. See [`tookit/README.md`](tookit/README.md). Currently supports only a small subset of client files; work is ongoing.
 
 ### 🤝 Call for Collaboration (Clean-Room Standards)
 We welcome anyone passionate about networking, reverse engineering, and game preservation to contribute! 
@@ -86,7 +86,7 @@ We welcome anyone passionate about networking, reverse engineering, and game pre
 * [x] **網絡底層架構設計：** 使用 C++ 完成基本 TCP 服務端骨架搭建。
 * [ ] **封包結構分析（黑箱）：** 正在解析並定義網絡握手階段之有限狀態機（Finite State Machine, FSM）通訊結構。
 * [ ] **客戶端動態引導模組：** 正在開發基於 C++ 異步網絡與動態鏈結庫（DLL Hooking）攔截的引導模組，以在不破壞檔案完整性的前提下，安全地導引連線流量。
-* [x] **數據提取腳本：** 初步 Python 工具包已就緒 — 可解析 `.biz` / `.pak` / `.sum` 二元容器並匯出 CSV / JSON。詳見 [`tools/For Output/tookit/README.md`](tools/For%20Output/tookit/README.md)。目前僅支援少量客戶端檔案，持續開發中。
+* [x] **數據提取腳本：** 初步 Python 工具包已就緒 — 可解析 `.biz` / `.pak` / `.sum` 二元容器並匯出 CSV / JSON。詳見 [`tookit/README.md`](tookit/README.md)。目前僅支援少量客戶端檔案，持續開發中。
 
 ### 🤝 誠邀技術合作（乾淨房開發標準）
 我們非常歡迎對網絡編程、逆向工程與遊戲數位保存感興趣的朋友一同貢獻智慧！
