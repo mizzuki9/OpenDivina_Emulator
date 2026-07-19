@@ -21,6 +21,7 @@ Language / 語言切換:
 ## English Version
 
 ### What's Included
+biz_gui.exe   click to use no python need
 
 | File | Type | Description |
 |---|---|---|
@@ -204,6 +205,7 @@ The source code is licensed under AGPL-3.0-or-later. See [LICENSE](./LICENSE).
 ## 繁體中文版本
 
 ### 包含的工具
+biz_gui.exe   點開免安裝python直接使用
 
 | 檔案 | 類型 | 說明 |
 |---|---|---|
@@ -214,7 +216,7 @@ The source code is licensed under AGPL-3.0-or-later. See [LICENSE](./LICENSE).
 | `run_gui.bat` | Windows launcher | 使用本機 Python 啟動 GUI |
 | `LICENSE` | 授權文件 | 目前原始碼授權聲明 |
 
-### 需求
+### 需求 
 
 * Python 3.10 或更新版本。
 * GUI 需要 Tkinter；標準 Windows Python 通常已包含它。
