@@ -48,13 +48,13 @@ The Divina extractor tries the optional native LZO2 backend first when available
 On Windows, start the GUI with:
 
 ```text
-run_gui.bat
+toolkit\run_gui.bat
 ```
 
 Or run it directly:
 
 ```bash
-python biz_gui.py
+python toolkit/biz_gui.py
 ```
 
 The tools can be run independently. Install QuickBMS or an optional native LZO2 library separately only when the corresponding fallback is needed.
@@ -70,7 +70,7 @@ The tools can be run independently. Install QuickBMS or an optional native LZO2 
 | `.ni_` | LZO1X extraction to NIF | Malformed or unsupported LZO streams may require the QuickBMS fallback |
 | `.k_` | LZO1X extraction to KF | Malformed or unsupported LZO streams may require the QuickBMS fallback |
 | `.dd_` | LZO1X extraction to DDS with DDS header repair when needed | Unsupported FourCC or invalid dimensions are rejected |
-| `.tg_` | LZO1X extraction to TGA | No additional TGA header synthesis is performed |
+| `.tg_` | LZO1X extraction to TGA | Headerless RGB/RGBA payloads receive a TGA header and BGR/BGRA channel ordering; existing TGA streams are preserved |
 | `.bm_` | XOR `0x99` extraction to JPEG | Container-specific malformed images may remain unreadable |
 | `.in_` | Raw XOR `0x97` extraction to INI | Detection is extension-based because this format has no Divina header |
 | Pizm variants | `.wa_`, `.og_`, `.scnz`, `.tilz` and `.ttxz` are handled as `pizm` variants where detected | Extension support still depends on a valid container header and payload |
@@ -216,7 +216,7 @@ biz_gui.exe   點開免安裝python直接使用
 | `run_gui.bat` | Windows launcher | 使用本機 Python 啟動 GUI |
 | `LICENSE` | 授權文件 | 目前原始碼授權聲明 |
 
-### 需求 
+### 需求
 
 * Python 3.10 或更新版本。
 * GUI 需要 Tkinter；標準 Windows Python 通常已包含它。
@@ -232,13 +232,13 @@ Divina extractor 會先嘗試可用的 native LZO2，再使用內建 Python LZO1
 Windows 執行 GUI：
 
 ```text
-run_gui.bat
+toolkit\run_gui.bat
 ```
 
 或直接執行：
 
 ```bash
-python biz_gui.py
+python toolkit/biz_gui.py
 ```
 
 各工具也可以獨立執行。只有在需要相應 fallback 時，才須另外安裝 QuickBMS 或可選的 native LZO2 library。
@@ -254,7 +254,7 @@ python biz_gui.py
 | `.ni_` | LZO1X 解出 NIF | 損壞或不支援的 LZO stream 可能需要 QuickBMS fallback |
 | `.k_` | LZO1X 解出 KF | 損壞或不支援的 LZO stream 可能需要 QuickBMS fallback |
 | `.dd_` | LZO1X 解出 DDS，必要時修補 DDS header | 不支援的 FourCC 或無效尺寸會被拒絕 |
-| `.tg_` | LZO1X 解出 TGA | 不會額外合成 TGA header |
+| `.tg_` | LZO1X 解出 TGA | 無檔頭 RGB／RGBA payload 會補上 TGA 檔頭並轉為 BGR／BGRA；既有 TGA 保留原樣 |
 | `.bm_` | XOR `0x99` 解出 JPEG | 特定容器的損壞圖片可能仍無法讀取 |
 | `.in_` | raw XOR `0x97` 解出 INI | 因為沒有 Divina header，偵測依副檔名進行 |
 | Pizm variants | 偵測到有效 `pizm` 時可處理 `.wa_`、`.og_`、`.scnz`、`.tilz`、`.ttxz` | 仍須有有效容器 header 與 payload |
@@ -386,3 +386,15 @@ GNU Affero General Public License 僅適用於專案貢獻者依法擁有權利�
 
 [Back to Top / 回到頂部](#binary-data-toolkit--二進制數據工具包)
 
+
+### Updated extraction and table handling / 解包與表格更新
+
+Headerless TGA repair preserves alpha and fixes red/blue ordering. DDS repair handles supported mip layouts and rejects invalid payloads. The source-byte API supports explicit in-process decoder policies and structured failures. CGameData containers use signed last indices (-1 means empty), are read once, and named empty tables export header-only CSV.
+
+無檔頭 TGA 修補會保留透明度並修正紅藍順序。DDS 修補處理支援的 mip 配置並拒絕無效 payload。來源位元組 API 提供明確的程序內解碼策略與結構化失敗結果。CGameData 容器使用有號末筆索引（-1 表示空容器），避免重複讀取，具欄位名稱的空表可匯出只有標頭的 CSV。
+
+Tests use synthetic data only / 測試僅使用人工合成資料：
+
+```text
+python -B -m unittest discover -s toolkit/tests -v
+```

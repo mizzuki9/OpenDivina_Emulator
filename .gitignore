@@ -67,3 +67,31 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Local caches, credentials and extracted game data
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.pem
+*.key
+dist/
+*.spec
+output/
+exports/
+GameData/
+*.ni_
+*.k_
+*.dd_
+*.tg_
+*.bm_
+*.biz
+*.pak
+*.sum
+*.scnz
+*.tilz
+*.ttxz
+*.nif
+*.kf
+*.dds
+*.tga

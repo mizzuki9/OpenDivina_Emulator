@@ -48,6 +48,13 @@ EXT_TO_OUTPUT = {
     '.in_': '.ini',  # .in_ decrypts to INI text
 }
 
+PLAIN_SOURCE_EXTENSIONS = {'.nif', '.kf', '.dds', '.tga', '.ifl'}
+SOURCE_DECODE_BACKEND_POLICIES = {
+    'IN_PROCESS_PREFER_NATIVE',
+    'BUILTIN_ONLY',
+    'NATIVE_ONLY',
+}
+
 
 def find_quickbms():
     """Locate quickbms.exe. Checks common paths."""
@@ -186,6 +193,30 @@ def extract_raw_xor(filepath: str, xor_key: int = XOR_KEY_IN) -> bytes:
 
 class LZO1XDecodeError(RuntimeError):
     """Raised when internal LZO1X decoding fails."""
+
+
+def lzo1x_failure_reason_code(error: BaseException) -> str:
+    """Map controlled decoder failures to stable, actionable receipt codes."""
+    detail = str(error)
+    exact = {
+        'LZO lookbehind overrun': 'LZO1X_LOOKBEHIND_OVERRUN',
+        'LZO literal input overrun': 'LZO1X_LITERAL_INPUT_OVERRUN',
+        'native LZO1X backend is unavailable': 'LZO1X_NATIVE_BACKEND_UNAVAILABLE',
+        'Divina payload is truncated': 'LZO1X_PAYLOAD_TRUNCATED',
+    }
+    if detail in exact:
+        return exact[detail]
+    prefixes = (
+        ('decoded size mismatch:', 'LZO1X_DECODED_SIZE_MISMATCH'),
+        ('invalid declared output size:', 'LZO1X_DECLARED_SIZE_INVALID'),
+        ('LZO input overrun', 'LZO1X_INPUT_OVERRUN'),
+        ('LZO output overrun', 'LZO1X_OUTPUT_OVERRUN'),
+        ('invalid LZO', 'LZO1X_STREAM_INVALID'),
+    )
+    for prefix, reason_code in prefixes:
+        if detail.startswith(prefix):
+            return reason_code
+    return 'LZO1X_DECODE_FAILED'
 
 
 def _load_native_lzo() -> ctypes.CDLL | None:
@@ -378,11 +409,15 @@ def _decompress_lzo1x(source: bytes, capacity: int) -> bytes:
         raise LZO1XDecodeError(f"invalid LZO decoder state: {state}")
 
 
-def decode_divina_lzo1x(filepath: str, info: dict) -> tuple[bytes, str]:
-    """
-    Decode LZO1X payload from a Divina container using in-process decoder.
-    """
-    data = Path(filepath).read_bytes()
+def decode_divina_lzo1x_bytes(
+    data: bytes,
+    info: dict,
+    *,
+    backend_policy: str = 'IN_PROCESS_PREFER_NATIVE',
+) -> tuple[bytes, str]:
+    """Decode one in-memory Divina LZO1X payload without external fallback."""
+    if backend_policy not in SOURCE_DECODE_BACKEND_POLICIES:
+        raise ValueError(f"unsupported source decode backend policy: {backend_policy}")
     header_size = info["header_size"]
     zsize = info["zsize"]
     payload_end = header_size + zsize
@@ -394,12 +429,16 @@ def decode_divina_lzo1x(filepath: str, info: dict) -> tuple[bytes, str]:
         raise LZO1XDecodeError(f"invalid declared output size: {expected_size}")
 
     payload = data[header_size:payload_end]
-    library = _load_native_lzo()
+    library = None if backend_policy == 'BUILTIN_ONLY' else _load_native_lzo()
+    if backend_policy == 'NATIVE_ONLY' and library is None:
+        raise LZO1XDecodeError("native LZO1X backend is unavailable")
     if library is not None:
         try:
             decoded = _decompress_lzo1x_native(payload, expected_size, library)
             backend = 'native'
         except LZO1XDecodeError:
+            if backend_policy == 'NATIVE_ONLY':
+                raise
             decoded = _decompress_lzo1x(payload, expected_size)
             backend = 'python'
     else:
@@ -410,6 +449,11 @@ def decode_divina_lzo1x(filepath: str, info: dict) -> tuple[bytes, str]:
             f"decoded size mismatch: {len(decoded)} != {expected_size}"
         )
     return decoded, backend
+
+
+def decode_divina_lzo1x(filepath: str, info: dict) -> tuple[bytes, str]:
+    """Compatibility path wrapper for the in-process Divina LZO1X decoder."""
+    return decode_divina_lzo1x_bytes(Path(filepath).read_bytes(), info)
 
 
 def build_dds_header(info: dict, raw_size: int) -> bytes:
@@ -459,10 +503,243 @@ def build_dds_header(info: dict, raw_size: int) -> bytes:
     return header
 
 
+def has_tga_header(raw: bytes, info: dict | None = None) -> bool:
+    """Return whether ``raw`` begins with a structurally plausible TGA header."""
+    if len(raw) < 18:
+        return False
+    image_type = raw[2]
+    width, height = struct.unpack_from('<HH', raw, 12)
+    pixel_depth = raw[16]
+    if image_type not in {1, 2, 3, 9, 10, 11}:
+        return False
+    if width <= 0 or height <= 0 or pixel_depth not in {8, 16, 24, 32}:
+        return False
+    if info is not None:
+        expected_width = int(info.get('width', 0))
+        expected_height = int(info.get('height', 0))
+        if expected_width > 0 and width != expected_width:
+            return False
+        if expected_height > 0 and height != expected_height:
+            return False
+    return True
+
+
+def build_tga_header(info: dict, raw_size: int) -> bytes:
+    """Build an uncompressed true-color TGA header from Client container metadata."""
+    width = int(info['width'])
+    height = int(info['height'])
+    if width <= 0 or height <= 0 or width > 0xFFFF or height > 0xFFFF:
+        raise ValueError(f"Invalid TGA dimensions: {width}x{height}")
+    pixel_count = width * height
+    if raw_size == pixel_count * 4:
+        pixel_depth = 32
+        descriptor = 0x28  # top-left origin, eight alpha bits
+    elif raw_size == pixel_count * 3:
+        pixel_depth = 24
+        descriptor = 0x20  # top-left origin
+    else:
+        raise ValueError(
+            f"TGA payload size does not match RGB/RGBA dimensions: "
+            f"{raw_size} for {width}x{height}"
+        )
+    header = struct.pack(
+        '<BBBHHBHHHHBB',
+        0,              # image ID length
+        0,              # no color map
+        2,              # uncompressed true-color image
+        0,
+        0,
+        0,
+        0,
+        0,
+        width,
+        height,
+        pixel_depth,
+        descriptor,
+    )
+    if len(header) != 18:
+        raise AssertionError(f"Invalid TGA header length: {len(header)}")
+    return header
+
+
 def repair_decoded_payload(raw: bytes, src_ext: str, info: dict) -> bytes:
     if src_ext == '.dd_' and not raw.startswith(b'DDS '):
         return build_dds_header(info, len(raw)) + raw
+    if src_ext == '.tg_' and not has_tga_header(raw, info):
+        header = build_tga_header(info, len(raw))
+        return header + _rgb_payload_to_tga_order(raw, header[16] // 8)
     return raw
+
+
+def _rgb_payload_to_tga_order(raw: bytes, bytes_per_pixel: int) -> bytes:
+    """Reorder a headerless ``.tg_`` payload into TGA true-color byte order.
+
+    The container stores pixels as R,G,B(,A); a TGA true-color image stores
+    B,G,R(,A).  Without this exchange every repaired TGA decodes with red and
+    blue swapped.
+    """
+    pixels = bytearray(raw)
+    pixels[0::bytes_per_pixel] = raw[2::bytes_per_pixel]
+    pixels[2::bytes_per_pixel] = raw[0::bytes_per_pixel]
+    return bytes(pixels)
+
+
+def _source_decode_failure(
+    source_extension: str,
+    reason_code: str,
+    detail: str,
+    *,
+    decode_backend: str | None = None,
+    container_metadata: dict | None = None,
+) -> dict:
+    return {
+        'result': 'FAIL_CLOSED',
+        'reason_code': reason_code,
+        'detail': detail,
+        'source_extension': source_extension,
+        'source_role': (
+            'STORED_CONTAINER'
+            if source_extension in LZO_EXTENSIONS
+            else 'PLAIN_SOURCE'
+        ),
+        'decode_backend': decode_backend,
+        'container_metadata': container_metadata,
+        'repair_steps': [],
+        'raw_decoded_bytes': None,
+        'logical_bytes': None,
+    }
+
+
+def _receipt_container_metadata(info: dict) -> dict:
+    fourcc = info.get('fourcc', b'')
+    if isinstance(fourcc, bytes):
+        fourcc_text = fourcc.decode('ascii', errors='replace')
+        fourcc_hex = fourcc.hex()
+    else:
+        fourcc_text = str(fourcc)
+        fourcc_hex = bytes(str(fourcc), 'utf-8').hex()
+    return {
+        'internal_filename': str(info.get('filename', '')),
+        'header_size': int(info.get('header_size', 0)),
+        'stored_payload_size': int(info.get('zsize', 0)),
+        'declared_logical_size': int(info.get('size', 0)),
+        'width': int(info.get('width', 0)),
+        'height': int(info.get('height', 0)),
+        'mip_count': int(info.get('mip_count', 0)),
+        'fourcc': fourcc_text,
+        'fourcc_hex': fourcc_hex,
+    }
+
+
+def decode_source_bytes(
+    filepath: str | Path,
+    *,
+    stored_bytes: bytes | None = None,
+    backend_policy: str = 'IN_PROCESS_PREFER_NATIVE',
+) -> dict:
+    """Decode one P1 source to bytes without writing a decoded corpus.
+
+    Failures are returned as stable ``FAIL_CLOSED`` results.  This is the
+    authoritative inventory API; it never invokes QuickBMS.
+    """
+    path = Path(filepath)
+    source_extension = path.suffix.lower()
+    if source_extension not in LZO_EXTENSIONS | PLAIN_SOURCE_EXTENSIONS:
+        return _source_decode_failure(
+            source_extension,
+            'UNSUPPORTED_SOURCE_EXTENSION',
+            f"unsupported P1 source extension: {source_extension}",
+        )
+    if backend_policy not in SOURCE_DECODE_BACKEND_POLICIES:
+        return _source_decode_failure(
+            source_extension,
+            'UNSUPPORTED_BACKEND_POLICY',
+            f"unsupported source decode backend policy: {backend_policy}",
+        )
+    try:
+        data = bytes(stored_bytes) if stored_bytes is not None else path.read_bytes()
+    except OSError as exc:
+        return _source_decode_failure(
+            source_extension,
+            'SOURCE_READ_FAILED',
+            f"{type(exc).__name__}: {exc}",
+        )
+
+    if source_extension in PLAIN_SOURCE_EXTENSIONS:
+        return {
+            'result': 'PLAIN_PASSTHROUGH',
+            'reason_code': None,
+            'detail': None,
+            'source_extension': source_extension,
+            'source_role': 'PLAIN_SOURCE',
+            'decode_backend': 'PLAIN_PASSTHROUGH',
+            'container_metadata': None,
+            'repair_steps': [],
+            'raw_decoded_bytes': data,
+            'logical_bytes': data,
+        }
+
+    try:
+        info = parse_divina_header(data)
+    except (ValueError, struct.error) as exc:
+        return _source_decode_failure(
+            source_extension,
+            'CONTAINER_HEADER_INVALID',
+            str(exc),
+        )
+    metadata = _receipt_container_metadata(info)
+    try:
+        raw, backend = decode_divina_lzo1x_bytes(
+            data,
+            info,
+            backend_policy=backend_policy,
+        )
+    except (LZO1XDecodeError, ValueError, struct.error) as exc:
+        return _source_decode_failure(
+            source_extension,
+            lzo1x_failure_reason_code(exc),
+            str(exc),
+            decode_backend=(
+                'LZO1X_NATIVE'
+                if backend_policy == 'NATIVE_ONLY'
+                else 'LZO1X_BUILTIN'
+                if backend_policy == 'BUILTIN_ONLY'
+                else 'LZO1X_IN_PROCESS'
+            ),
+            container_metadata=metadata,
+        )
+    try:
+        logical = repair_decoded_payload(raw, source_extension, info)
+    except (ValueError, struct.error) as exc:
+        return _source_decode_failure(
+            source_extension,
+            'LOGICAL_REPAIR_FAILED',
+            str(exc),
+            decode_backend=(
+                'LZO1X_NATIVE' if backend == 'native' else 'LZO1X_BUILTIN'
+            ),
+            container_metadata=metadata,
+        )
+    repair_steps: list[str] = []
+    if logical is not raw:
+        if source_extension == '.dd_':
+            repair_steps.append('ADD_DDS_HEADER')
+        elif source_extension == '.tg_':
+            repair_steps.append('ADD_TGA_HEADER')
+    return {
+        'result': 'DECODED',
+        'reason_code': None,
+        'detail': None,
+        'source_extension': source_extension,
+        'source_role': 'STORED_CONTAINER',
+        'decode_backend': (
+            'LZO1X_NATIVE' if backend == 'native' else 'LZO1X_BUILTIN'
+        ),
+        'container_metadata': metadata,
+        'repair_steps': repair_steps,
+        'raw_decoded_bytes': raw,
+        'logical_bytes': logical,
+    }
 
 
 def extract_lzo_quickbms(filepath: str, output_dir: str, info: dict) -> str:
@@ -581,18 +858,24 @@ def extract_divina(filepath: str, output_dir: str) -> dict:
         }
 
     elif src_ext in LZO_EXTENSIONS:
-        # LZO1X mode: native LZO2, built-in Python decoder, then QuickBMS fallback.
-        try:
-            raw, backend = decode_divina_lzo1x(filepath, info)
-            raw = repair_decoded_payload(raw, src_ext, info)
+        # The compatibility extractor keeps its legacy QuickBMS fallback.  P1
+        # inventory calls decode_source_bytes() directly and never takes it.
+        decoded = decode_source_bytes(filepath, stored_bytes=data)
+        if decoded['result'] == 'DECODED':
+            raw = decoded['logical_bytes']
+            backend = decoded['decode_backend']
             Path(out_path).write_bytes(raw)
             return {
                 'filename': out_name,
                 'output_path': out_path,
                 'size': os.path.getsize(out_path),
-                'format': f'lzo1x_{backend}',
+                'format': (
+                    'lzo1x_native'
+                    if backend == 'LZO1X_NATIVE'
+                    else 'lzo1x_python'
+                ),
             }
-        except LZO1XDecodeError:
+        if str(decoded['reason_code']).startswith('LZO1X_'):
             qbms_out = extract_lzo_quickbms(filepath, output_dir, info)
             raw = Path(qbms_out).read_bytes()
             raw = repair_decoded_payload(raw, src_ext, info)
@@ -608,6 +891,9 @@ def extract_divina(filepath: str, output_dir: str) -> dict:
                 'size': os.path.getsize(out_path),
                 'format': 'lzo1x_quickbms_fallback',
             }
+        raise ValueError(
+            f"{decoded['reason_code']}: {decoded['detail']}"
+        )
 
     else:
         raise ValueError(f"Unsupported divina extension: {src_ext} (internal: {info['ext']})")

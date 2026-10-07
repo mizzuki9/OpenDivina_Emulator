@@ -92,6 +92,16 @@ def read_cbstring(r: Reader) -> str:
         return raw.decode("utf-8", errors="replace")
 
 
+def _read_last_index(r: Reader, ver: int) -> int:
+    """Signed last occupied index; v5+ is int16 (MOVSX), older is int32.
+
+    last_index == -1 means an empty container (zero slots).
+    """
+    if ver >= 5:
+        return r.s16()
+    return r.s32()
+
+
 # ── CGameData parser ──
 
 class CGameData:
@@ -106,8 +116,6 @@ class CGameData:
         self.raw_tables = []
 
         self._parse_header()
-        if self.signature == "newdiac":
-            self._read_container_objects()
 
     def _parse_header(self):
         r = self.r
@@ -179,21 +187,19 @@ class CGameData:
 
     def _read_container_objects(self):
         """
-        Read container items. The stored value is max_index;
-        C code uses do-while (i <= max_index), so we iterate max_index+1 times.
+        Read container items. The stored value is signed last_index
+        (v5+: int16 with MOVSX; older: int32). CGContainer::Read loops
+        while i <= last_index using signed compare, so last_index=-1 is empty.
         """
         r = self.r
         ver = self.version
 
         try:
-            if ver >= 5:
-                max_index = r.u16()
-            else:
-                max_index = r.u32()
+            last_index = _read_last_index(r, ver)
         except (EOFError, IndexError, struct.error):
             return
 
-        for slot_idx in range(max_index + 1):
+        for slot_idx in range(last_index + 1):
             try:
                 if r.tell() >= len(r.data):
                     break
@@ -340,12 +346,9 @@ class CGContainer(CGBase):
         self._read_container(r, version)
 
     def _read_container(self, r: Reader, ver: int):
-        if ver >= 5:
-            max_index = r.u16()
-        else:
-            max_index = r.u32()
+        last_index = _read_last_index(r, ver)
 
-        for _ in range(max_index + 1):
+        for _ in range(last_index + 1):
             try:
                 if ver < 4:
                     present = r.u32()
@@ -556,7 +559,14 @@ def export_csv(gdata: CGameData, out_dir: Path):
 
         rows = table.to_csv_rows()
         if len(rows) <= 1:
-            print(f"  [SKIP] {table.table_name} (empty, no rows)")
+            if not table.table_name or not table.column_names:
+                print(f"  [SKIP] {table.table_name} (empty, no rows)")
+                continue
+            with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerows(rows)
+            print(f"  [OK]   {csv_path.name}  (0 rows x {len(rows[0])} cols, header-only)")
+            total_exported += 1
             continue
 
         with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
